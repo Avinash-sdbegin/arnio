@@ -107,7 +107,7 @@ This built-in registry routes operations to highly optimized native C++ backed s
 
 ### Custom Pipeline Steps
 
-If the name is absent from the built-in registries, it searches `_PYTHON_STEP_REGISTRY` for custom, user-defined Python fallbacks.
+If the name is absent from `_STEP_REGISTRY`, the system then checks `_PYTHON_STEP_REGISTRY` for Python-backed built-ins and custom user-defined fallback steps.
 
 ### The Conversion Penalty
 
@@ -138,18 +138,26 @@ The current pipeline registry is split into native C++ backed steps and Python/p
 | Step | Backend |
 |---|---|
 | drop_nulls | Native C++ |
+| keep_rows_with_nulls | Native C++ |
 | fill_nulls | Native C++ |
 | validate_columns_exist | Native C++ |
 | drop_duplicates | Native C++ |
 | drop_constant_columns | Native C++ |
 | clip_numeric | Native C++ |
 | strip_whitespace | Native C++ |
+| parse_bool_strings | Native C++ |
 | normalize_case | Native C++ |
+| normalize_unicode | Native C++ |
 | rename_columns | Native C++ |
 | cast_types | Native C++ |
 | round_numeric_columns | Native C++ |
+| combine_columns | Native C++ |
+| trim_column_names | Native C++ |
+| standardize_missing_tokens | Python/pandas |
 | filter_rows | Python/pandas |
+| drop_columns_matching | Python/pandas |
 | safe_divide_columns | Python/pandas |
+| replace_values | Python/pandas |
 | custom registered steps | Python/pandas |
 
 ### Why backend selection matters
@@ -161,8 +169,6 @@ Python/pandas backed steps use the slower conversion path:
 ```text
 Frame → to_pandas() → from_pandas() → Frame
 ```
-
-These roundtrips can introduce additional memory allocation and type re-inference overhead.
 
 ---
 
