@@ -129,6 +129,31 @@ Core cleaning primitives should ideally be implemented as C++ built-ins to bypas
 
 ---
 
+### Step Backend Execution Map
+
+| Step | Backend |
+|---|---|
+| drop_nulls | Native C++ |
+| strip_whitespace | Native C++ |
+| normalize_case | Native C++ |
+| drop_duplicates | Native C++ |
+| fill_nulls | Native C++ |
+| filter_rows | Python-backed |
+| custom registered steps | Python-backed |
+
+### Why backend selection matters
+
+C++-backed steps execute directly inside the Arnio runtime and avoid unnecessary pandas conversion overhead.
+
+Python-backed steps may require:
+
+```text
+Frame → to_pandas() → from_pandas() → Frame
+```
+These roundtrips can introduce additional memory allocation and type re-inference overhead.
+
+---
+
 ## 6. Converting to Pandas
 
 The `to_pandas()` function is a critical boundary.
