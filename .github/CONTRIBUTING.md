@@ -102,6 +102,11 @@ def test_remove_special_chars(sample_csv):
 8. Open the pull request and link the issue with `Fixes #issue-number` when complete.
 9. Ensure your PR title follows **Conventional Commits**.
 
+## C++ extension stubs
+
+If you change the C++ pybind11 API, update the type stubs in
+[STUBS_UPDATE.md](../STUBS_UPDATE.md) and keep the Python call sites aligned.
+
 ### Review expectations
 
 - Do not open duplicate PRs for the same issue.
