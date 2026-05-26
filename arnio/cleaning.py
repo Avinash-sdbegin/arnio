@@ -82,7 +82,7 @@ def _validate_column_sequence(
         raise TypeError(
             f"{argument_name} must be a sequence of column names, not a string"
         )
-    if not isinstance(columns, Sequence):
+    if not isinstance(columns, Sequence) and not isinstance(columns, pd.Index):
         raise TypeError(f"{argument_name} must be a sequence of column names")
 
     normalized = list(columns)
@@ -1883,7 +1883,7 @@ def standardize_missing_tokens(frame, tokens=None, subset=None):
 def coalesce_columns(
     frame,
     *,
-    subset: list[str],
+    subset: Sequence[str],
     output_column: str = "coalesced",
 ):
     """Select the first non-null value from a list of columns.
@@ -1892,8 +1892,8 @@ def coalesce_columns(
     ----------
     frame : ArFrame or pd.DataFrame
         Input data frame.
-    subset : list[str]
-        List of columns to check in order.
+    subset : sequence of str
+        Sequence of columns to check in order.
     output_column : str, default "coalesced"
         Name of the new column to store coalesced values.
 
@@ -1923,16 +1923,12 @@ def coalesce_columns(
     from .convert import from_pandas, to_pandas
     from .frame import ArFrame
 
-    if not isinstance(subset, list):
-        raise TypeError("subset must be a list of column names")
-    if not subset:
-        raise ValueError("subset must contain at least one column")
-    if not isinstance(output_column, str) or not output_column.strip():
-        raise ValueError("output_column must be a non-empty string")
-
     is_arframe = isinstance(frame, ArFrame)
     if not is_arframe and not isinstance(frame, pd.DataFrame):
         raise TypeError("frame must be an ArFrame or a pandas DataFrame")
+
+    if not isinstance(output_column, str) or not output_column.strip():
+        raise ValueError("output_column must be a non-empty string")
 
     column_names = list(frame.columns)
     subset_columns = _validate_existing_column_sequence(
@@ -1944,6 +1940,9 @@ def coalesce_columns(
             f"Available columns: {available}"
         ),
     )
+
+    if not subset_columns:
+        raise ValueError("subset must contain at least one column")
 
     if output_column in column_names:
         raise ValueError(f"Output column '{output_column}' already exists.")
