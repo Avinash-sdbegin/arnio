@@ -367,6 +367,49 @@ class TestFromPandas:
 
         assert "Fix:" in str(exc_info.value)
 
+    def test_from_pandas_object_custom_class_raises_clear_error(self):
+        class Token:
+            def __str__(self):
+                return "TOKEN"
+
+        df = pd.DataFrame({"x": pd.Series([Token()], dtype=object)})
+        with pytest.raises(
+            TypeError, match="Column 'x' contains unsupported scalar value"
+        ) as exc_info:
+            ar.from_pandas(df)
+        assert "Fix:" in str(exc_info.value)
+
+    def test_from_pandas_object_bytes_raises_clear_error(self):
+        df = pd.DataFrame({"x": pd.Series([b"abc"], dtype=object)})
+        with pytest.raises(
+            TypeError, match="Column 'x' contains unsupported scalar value"
+        ) as exc_info:
+            ar.from_pandas(df)
+        assert "Fix:" in str(exc_info.value)
+
+    def test_from_pandas_object_datetime_date_and_time_raise_clear_error(self):
+        import datetime as dt
+
+        df_date = pd.DataFrame({"x": pd.Series([dt.date(2026, 5, 29)], dtype=object)})
+        with pytest.raises(
+            TypeError, match="Column 'x' contains unsupported scalar value"
+        ):
+            ar.from_pandas(df_date)
+
+        df_time = pd.DataFrame({"x": pd.Series([dt.time(12, 30)], dtype=object)})
+        with pytest.raises(
+            TypeError, match="Column 'x' contains unsupported scalar value"
+        ):
+            ar.from_pandas(df_time)
+
+    def test_from_pandas_object_pandas_period_raises_clear_error(self):
+        df = pd.DataFrame({"x": pd.Series([pd.Period("2026-05")], dtype=object)})
+        with pytest.raises(
+            TypeError, match="Column 'x' contains unsupported scalar value"
+        ) as exc_info:
+            ar.from_pandas(df)
+        assert "Fix:" in str(exc_info.value)
+
     def test_from_pandas_native_datetime64_raises_clear_error(self):
         """Native datetime64 columns should raise a clear TypeError with a fix hint."""
         df = pd.DataFrame({"timestamp": pd.date_range("2026-05-20", periods=3)})
