@@ -430,7 +430,6 @@ def run_case(case, skip_correctness=False):
                     f"{regression_percent:.1f}% slower than baseline "
                     f"(threshold: {REGRESSION_THRESHOLD}%)"
                 )
-            
     else:
         print("No baseline found for regression comparison.")
 
