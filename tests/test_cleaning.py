@@ -44,6 +44,19 @@ class TestDropNulls:
 
 
 class TestKeepRowsWithNulls:
+    def test_pandas_input_empty_subset_raises(self):
+        df = pd.DataFrame({"name": ["Alice", None]})
+
+        with pytest.raises(ValueError, match="subset"):
+            ar.keep_rows_with_nulls(df, subset=[])
+
+
+    def test_pandas_input_empty_tuple_subset_raises(self):
+        df = pd.DataFrame({"name": ["Alice", None]})
+
+        with pytest.raises(ValueError, match="subset"):
+            ar.keep_rows_with_nulls(df, subset=())
+
     def test_empty_subset_raises(self):
         frame = ar.from_pandas(
             pd.DataFrame({"name": ["Alice", None]})

@@ -223,10 +223,7 @@ def drop_nulls(
     """
     frame, _ = _validate_frame(frame)
     if subset is not None:
-        subset = _validate_column_sequence(
-                   subset,
-                   argument_name="subset"
-        )
+        subset = _validate_column_sequence(subset, argument_name="subset")
         if len(subset) == 0:
             raise ValueError(
                 "drop_nulls: subset cannot be empty; pass subset=None to check all columns"
@@ -341,10 +338,7 @@ def keep_rows_with_nulls(
     df = to_pandas(frame) if is_arframe else frame
 
     if subset is not None:
-        subset = _validate_column_sequence(
-            subset,
-            argument_name="subset",
-        )
+        subset = _validate_column_sequence(subset, argument_name="subset")
 
         if len(subset) == 0:
            raise ValueError(
