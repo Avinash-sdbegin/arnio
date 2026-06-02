@@ -49,7 +49,7 @@ arnio.read_csv_chunked(
     dtype=None,
     nrows=None,
     skip_rows=0,
-    skiprows=0,
+    skiprows=None,
     trim_headers=True,
     decimal_separator=".",
     thousands_separator=None,
@@ -73,14 +73,15 @@ and inferred types.
 | `usecols` | `list[str] \| None` | `None` | Subset of columns to load. |
 | `dtype` | `dict[str, str] \| None` | `None` | Force specific types for named columns instead of inferring them (e.g. `{"id": "string"}`). |
 | `nrows` | `int \| None` | `None` | Stop after reading this many rows in total across all chunks. `None` reads to end-of-file. |
-| `skip_rows` / `skiprows` | `int` | `0` | Number of rows to skip at the top of the file before the header. Both spellings are accepted and behave identically. |
+| `skip_rows` | `int` | `0` | Number of data rows to skip after the header. |
+| `skiprows` | `int \| None` | `None` | Optional alias for `skip_rows`. When provided, takes precedence over `skip_rows`. |
 | `trim_headers` | `bool` | `True` | Strip leading and trailing whitespace from column header names. |
 | `decimal_separator` | `str` | `"."` | Decimal point character. Use `","` for European-style CSVs. |
 | `thousands_separator` | `str \| None` | `None` | Thousands grouping character (e.g. `","`). Stripped before numeric parsing. |
 | `null_values` | `list[str] \| None` | `None` | Additional strings to treat as null (e.g. `["N/A", "–", "none"]`). Always combined with the built-in set. |
-| `mode` | `str` | `"strict"` | Parsing mode. `"strict"` raises on the first malformed line regardless of `on_bad_lines`; `"default"` follows `on_bad_lines`. |
+| `mode` | `str` | `"strict"` | `"strict"` rejects rows with extra fields and raises on bad lines; `"permissive"` also rejects extra fields but pads missing trailing fields with nulls. |
 | `encoding` | `str` | `"utf-8"` | File encoding. Non-UTF-8 input is transcoded before the C++ parser runs. |
-| `on_bad_lines` | `"error" \| "warn" \| "skip"` | `"error"` | Behaviour when a malformed line is encountered. Ignored when `mode="strict"`. |
+| `on_bad_lines` | `"error" \| "warn" \| "skip"` | `"error"` | Action taken for rows classified as bad by the selected mode. |
 
 The iterator is consumed once; re-iteration requires a new call to `read_csv_chunked`.
 
@@ -445,5 +446,3 @@ print("Validation passed.")
 ```
 
 ---
-
-*Fixes #2271.*
