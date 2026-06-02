@@ -89,7 +89,8 @@
         </tbody></table>
 
         <h2 id="pipeline">Pipeline</h2>
-        <div class="api-func"><div class="api-func-header">pipeline(frame, steps, *, verbose=False)</div><div class="api-func-body"><p>Run named cleaning steps or registered Python callables. <code>verbose=True</code> enables lightweight diagnostics through the <code>arnio</code> logger and optional <code>PipelineContext</code>.</p></div></div>
+        <div class="api-func"><div class="api-func-header">pipeline(frame, steps, *, verbose=False, track_lineage=False)</div><div class="api-func-body"><p>Run named cleaning steps or registered Python callables. <code>verbose=True</code> enables lightweight diagnostics through the <code>arnio</code> logger and optional <code>PipelineContext</code>. Pass <code>track_lineage=True</code> to receive a <code>(ArFrame, LineageReport)</code> tuple that maps every dropped row back to its original index and the step that removed it.</p></div></div>
+        <div class="api-func"><div class="api-func-header">LineageReport</div><div class="api-func-body"><p>Returned by <code>pipeline(..., track_lineage=True)</code>. Attributes: <code>dropped_by_step</code> (dict mapping step name → sorted list of original row indices dropped by that step; steps that dropped no rows have an empty list) and <code>total_dropped</code> (int). Method: <code>to_pandas()</code> returns a flat <code>DataFrame</code> with columns <code>original_index</code> and <code>step</code>.</p></div></div>
         <div class="api-func"><div class="api-func-header">register_step(name, fn, overwrite=False), unregister_step(name), list_steps(), reset_steps(), get_builtin_step_signatures()</div><div class="api-func-body"><p>Manage the step registry and discover available built-in signatures.</p></div></div>
 
         <h2 id="quality">Quality</h2>

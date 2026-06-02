@@ -61,6 +61,9 @@ _PYTHON_STEP_REGISTRY: dict[str, Callable] = {
 _BUILTIN_PYTHON_STEP_REGISTRY: dict[str, Callable] = {}
 
 
+_LINEAGE_SENTINEL_COL = "__arnio_lineage_id__"
+
+
 @dataclass(frozen=True)
 class PipelineContext:
     """Execution context passed to opt-in Python pipeline steps."""
@@ -69,6 +72,48 @@ class PipelineContext:
     step_index: int
     total_steps: int
     dry_run: bool
+
+
+@dataclass(frozen=True)
+class LineageReport:
+    """Maps dropped rows back to their original indices and the step that dropped them.
+
+    Returned by :func:`pipeline` when ``track_lineage=True``.
+
+    Attributes
+    ----------
+    dropped_by_step : dict[str, list[int]]
+        Mapping from step name to a sorted list of original row indices that
+        were dropped by that step.  Steps that dropped no rows have an empty
+        list.
+    total_dropped : int
+        Total number of rows dropped across all steps.
+
+    Examples
+    --------
+    >>> result, lineage = ar.pipeline(frame, steps, track_lineage=True)
+    >>> lineage.dropped_by_step
+    {"drop_nulls": [1, 2], "drop_duplicates": [4]}
+    >>> lineage.total_dropped
+    3
+    >>> lineage.to_pandas()
+       original_index          step
+    0               1    drop_nulls
+    1               2    drop_nulls
+    2               4  drop_duplicates
+    """
+
+    dropped_by_step: dict[str, list[int]]
+    total_dropped: int
+
+    def to_pandas(self) -> pd.DataFrame:
+        """Return a flat DataFrame with columns ``original_index`` and ``step``."""
+        rows = [
+            {"original_index": idx, "step": step_name}
+            for step_name, indices in self.dropped_by_step.items()
+            for idx in indices
+        ]
+        return pd.DataFrame(rows, columns=["original_index", "step"])
 
 
 class _WritablePipelineSeries(pd.Series):
@@ -372,7 +417,8 @@ def pipeline(
     return_metadata: bool = False,
     dry_run: bool = False,
     verbose: bool = False,
-) -> ArFrame | tuple[ArFrame, dict[str, Any]]:
+    track_lineage: bool = False,
+) -> ArFrame | tuple[ArFrame, dict[str, Any]] | tuple[ArFrame, LineageReport]:
     """Apply a list of cleaning steps sequentially.
 
     Each step is a tuple of (step_name,) or (step_name, kwargs_dict).
@@ -398,13 +444,33 @@ def pipeline(
         Validates pipeline structure and step execution without
         returning transformed output.
 
+    track_lineage : bool, default False
+        When True, inject a hidden sentinel column to track which original row
+        indices are dropped by each step, then return ``(ArFrame, LineageReport)``
+        instead of a bare ``ArFrame``.  The sentinel column is always stripped
+        from the returned frame before it is handed back to the caller.
+
+        Custom Python steps receive the sentinel column as a regular ``int64``
+        column and **must not drop it**; document this constraint when writing
+        custom steps that will be used with ``track_lineage=True``.
+
+        Implies a complete pass through the pipeline (equivalent to
+        ``return_metadata=False`` behaviour for the frame result); use
+        ``return_metadata=True`` separately if per-step timings are also needed.
+
     Returns
     -------
     ArFrame
-        Data frame with all steps applied sequentially.
+        Data frame with all steps applied sequentially (``track_lineage=False``).
+    tuple[ArFrame, LineageReport]
+        Frame and lineage report when ``track_lineage=True``.
+    tuple[ArFrame, dict]
+        Frame and metadata dict when ``return_metadata=True``.
 
     Raises
     ------
+    TypeError
+        If ``track_lineage`` is not a bool.
     ValueError
         If step format is invalid.
     UnknownStepError
@@ -429,6 +495,10 @@ def pipeline(
         raise TypeError(f"dry_run must be a bool, got {type(dry_run).__name__!r}")
     if not isinstance(verbose, bool):
         raise TypeError(f"verbose must be a bool, got {type(verbose).__name__!r}")
+    if not isinstance(track_lineage, bool):
+        raise TypeError(
+            f"track_lineage must be a bool, got {type(track_lineage).__name__!r}"
+        )
     with _REGISTRY_LOCK:
         python_step_registry = dict(_PYTHON_STEP_REGISTRY)
         namespaced_builtin_steps = _get_namespaced_builtin_steps(python_step_registry)
@@ -444,6 +514,22 @@ def pipeline(
 
     result = frame
     working_frame = frame
+
+    # --- lineage tracking setup -------------------------------------------
+    # Inject a hidden int64 sentinel column (values 0..n-1) so we can track
+    # exactly which original row indices survive each row-dropping step.
+    # The C++ engine treats it as an ordinary column and filters/deduplicates
+    # it correctly alongside all other columns.
+    _lineage_dropped_by_step: dict[str, list[int]] = {}
+    _lineage_current_ids: set[int] = set()
+    if track_lineage:
+        _sentinel_df = to_pandas(frame).copy()
+        _sentinel_df.insert(0, _LINEAGE_SENTINEL_COL, range(len(_sentinel_df)))
+        _sentinel_frame = from_pandas(_sentinel_df)
+        result = _sentinel_frame
+        working_frame = _sentinel_frame
+        _lineage_current_ids = set(range(len(_sentinel_df)))
+    # -----------------------------------------------------------------------
 
     step_timings: list[dict[str, Any]] = []
     applied_steps: list[str] = []
@@ -466,6 +552,26 @@ def pipeline(
 
         name = _resolve_step_name(name, deprecated_step_aliases)
         name = namespaced_builtin_steps.get(name, name)
+
+        # --- lineage: sentinel compatibility for drop_duplicates -----------
+        # The sentinel column has a unique value per row.  Without this fix,
+        # drop_duplicates would see every row as distinct and drop nothing.
+        # We auto-restrict its subset to user-visible columns only.
+        if track_lineage and name == "drop_duplicates":
+            _user_cols = [
+                c
+                for c in to_pandas(working_frame).columns
+                if c != _LINEAGE_SENTINEL_COL
+            ]
+            kwargs = {
+                **kwargs,
+                "subset": [
+                    c
+                    for c in kwargs.get("subset", _user_cols)
+                    if c != _LINEAGE_SENTINEL_COL
+                ],
+            }
+        # ------------------------------------------------------------------
 
         if name in _STEP_REGISTRY:
             # C++ backed step - fast path
@@ -618,6 +724,32 @@ def pipeline(
         else:
             available = list(_STEP_REGISTRY.keys()) + list(python_step_registry.keys())
             raise UnknownStepError(name, available)
+
+        # --- per-step lineage diff ----------------------------------------
+        # After each step (C++ or Python), check which sentinel IDs survived.
+        # Non-dropping steps produce an empty diff naturally — no special-casing.
+        if track_lineage:
+            _after_pdf = to_pandas(working_frame)
+            _surviving_ids: set[int] = set(_after_pdf[_LINEAGE_SENTINEL_COL].tolist())
+            _newly_dropped = sorted(_lineage_current_ids - _surviving_ids)
+            _lineage_dropped_by_step[name] = _newly_dropped
+            _lineage_current_ids = _surviving_ids
+        # ------------------------------------------------------------------
+
+    # --- lineage return path -----------------------------------------------
+    # Strip the hidden sentinel column from the result before returning so
+    # callers never see it, then build and return the LineageReport.
+    if track_lineage:
+        _result_pdf = to_pandas(result)
+        result = from_pandas(_result_pdf.drop(columns=[_LINEAGE_SENTINEL_COL]))
+        _lineage_report = LineageReport(
+            dropped_by_step=_lineage_dropped_by_step,
+            total_dropped=sum(
+                len(indices) for indices in _lineage_dropped_by_step.values()
+            ),
+        )
+        return result, _lineage_report
+    # -----------------------------------------------------------------------
 
     if return_metadata:
         return result, {

@@ -62,6 +62,7 @@ from .io import (
     write_parquet,
 )
 from .pipeline import (
+    LineageReport,
     PipelineContext,
     get_builtin_step_signatures,
     list_steps,
@@ -178,6 +179,7 @@ __all__ = [
     "get_builtin_step_signatures",
     "list_steps",
     "PipelineContext",
+    "LineageReport",
     "reset_steps",
     # Data quality
     "profile",
