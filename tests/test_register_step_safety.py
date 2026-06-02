@@ -153,7 +153,6 @@ class TestUnregisterStepBuiltinAlias:
         Ensures the fix does not weaken protection for real built-in names
         such as 'filter_rows', 'normalize_whitespace', 'coalesce_columns'.
         """
-        
 
         for step_name in list(_BUILTIN_PYTHON_STEP_REGISTRY):
             with pytest.raises(ValueError):
