@@ -8,7 +8,7 @@ import arnio as ar
 def test_read_csv_gz_parity():
     # Create a temporary uncompressed CSV
     with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".csv", delete=False
+        mode="w", suffix=".csv", encoding="utf-8", delete=False
     ) as uncompressed:
         uncompressed.write("id,name,value\n")
         uncompressed.write("1,alice,10.5\n")
