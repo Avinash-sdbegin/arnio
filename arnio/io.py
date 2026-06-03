@@ -513,6 +513,7 @@ def _materialize_csv_input(
     """
     if isinstance(source, (str, os.PathLike)):
         raw = os.fspath(source)
+        is_temp = False
 
         # Only inspect scheme for plain strings — PathLike objects are
         # always local filesystem paths.
@@ -530,9 +531,54 @@ def _materialize_csv_input(
 
             # HTTP/HTTPS — fetch via stdlib urllib, no new dependencies.
             if scheme in _SUPPORTED_URL_SCHEMES:
-                tmp_path = _fetch_url_to_tempfile(raw)
-                return tmp_path, True, True
+                raw = _fetch_url_to_tempfile(raw)
+                is_temp = True
 
+        is_gz = False
+        if isinstance(source, str) and source.lower().endswith(".gz"):
+            is_gz = True
+        elif not isinstance(source, str) and raw.lower().endswith(".gz"):
+            is_gz = True
+            
+        if is_gz:
+            import gzip
+            import shutil
+            import tempfile
+            tmp = tempfile.NamedTemporaryFile(
+                mode="wb",
+                suffix=".csv",
+                delete=False,
+            )
+            try:
+                with gzip.open(raw, "rb") as gz_file:
+                    shutil.copyfileobj(gz_file, tmp, length=_FILE_LIKE_COPY_CHUNK_SIZE)
+                tmp.close()
+                if is_temp:
+                    try:
+                        os.unlink(raw)
+                    except OSError:
+                        pass
+                return tmp.name, True, False
+            except Exception:
+                try:
+                    tmp.close()
+                except OSError:
+                    pass
+                try:
+                    os.unlink(tmp.name)
+                except OSError:
+                    pass
+                if is_temp:
+                    try:
+                        os.unlink(raw)
+                    except OSError:
+                        pass
+                raise
+
+        # If it was an HTTP fetch but not a .gz, it's materialized text
+        if is_temp:
+            return raw, True, True
+            
         return raw, False, False
 
     if isinstance(source, io.StringIO) or (
@@ -648,7 +694,8 @@ def read_csv(
     ----------
     path : str or file-like object
         Filesystem path or text file-like object containing CSV data.
-        Any file extension is accepted. For ``.tsv`` files, the delimiter
+        Any file extension is accepted, including compressed ``.csv.gz`` files.
+        For ``.tsv`` files, the delimiter
         is automatically set to ``'\t'`` when ``delimiter`` is omitted.
     delimiter : str or None, default None
         Field delimiter character.  When ``None`` (the default) the
@@ -857,7 +904,7 @@ def read_csv_chunked(
     Parameters
     ----------
     path : str or file-like object
-        Path to the CSV file. Supports .csv, .txt, and .tsv extensions.
+        Path to the CSV file. Supports .csv, .txt, .tsv, and compressed .csv.gz extensions.
         Text file-like objects are copied to a temporary file in bounded
         chunks before native parsing.  For ``.tsv`` paths the delimiter is
         automatically set to ``'\\t'`` when ``delimiter`` is omitted.
@@ -1147,7 +1194,8 @@ def scan_csv(
     ----------
     path : str or file-like object
         Filesystem path or text file-like object containing CSV data.
-        Any file extension is accepted. For ``.tsv`` files, the delimiter
+        Any file extension is accepted, including compressed ``.csv.gz`` files.
+        For ``.tsv`` files, the delimiter
         is automatically set to ``'\t'`` when ``delimiter`` is omitted.
     delimiter : str or None, default None
         Field delimiter character.  When ``None`` (the default) the
