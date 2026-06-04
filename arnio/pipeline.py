@@ -655,10 +655,7 @@ def pipeline(
                     key in kwargs for key in reserved_kwargs - {"mapping"}
                 )
 
-                if (
-                    "mapping" in kwargs
-                    and isinstance(kwargs["mapping"], dict)
-                ):
+                if "mapping" in kwargs and isinstance(kwargs["mapping"], dict):
                     step_result = fn(working_frame, **kwargs)
 
                 elif has_reserved_kwargs:
