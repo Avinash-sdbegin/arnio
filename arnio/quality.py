@@ -10,7 +10,7 @@ import json
 import math
 import os
 import re
-from collections.abc import Sequence, Set
+from collections.abc import Iterable, Sequence, Set
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -1563,6 +1563,282 @@ def profile(
         score_components=score_components,
         columns=report.columns,
         suggestions=suggest_cleaning(report),
+    )
+
+
+def profile_chunked(
+    chunks: Iterable[ArFrame],
+    *,
+    sample_size: int = 5,
+) -> DataQualityReport:
+    """Profile data quality for an iterable of ArFrame chunks.
+
+    Applies :func:`profile` to each chunk in turn and merges the
+    per-chunk statistics into a single :class:`DataQualityReport`.
+
+    **Accuracy contract** — the following fields are **exact** across
+    all chunks:
+
+    * ``row_count`` — sum of all chunk row counts.
+    * ``null_count`` / ``null_ratio`` — exact per-column null statistics.
+    * ``min`` / ``max`` — exact per-column value bounds.
+    * ``mean`` — exact weighted mean for numeric columns.
+    * ``empty_string_count`` / ``whitespace_count`` — exact per-column
+      string counts.
+
+    The following fields are **not computed** in chunked mode and are
+    set to zero or ``None`` because exact aggregation would require
+    materialising the entire dataset:
+
+    * ``duplicate_rows`` / ``duplicate_ratio`` — set to ``0`` / ``0.0``.
+      Only within-chunk duplicates could be detected; cross-chunk
+      duplicates are not tracked.
+    * ``unique_count`` / ``unique_ratio`` — set to ``0`` / ``0.0``.
+      Exact uniqueness requires a full-data scan.
+    * ``quality_score`` — computed only from the null penalty; duplicate
+      and type-mismatch penalties are omitted because duplicate and
+      uniqueness data are unavailable.
+    * Quantile fields (``q25``, ``q50``, ``q75``, ``q95``, ``iqr``,
+      ``outlier_lower_bound``, ``outlier_upper_bound``,
+      ``outlier_count``, ``outlier_ratio``, ``std``) — set to ``None``.
+    * ``top_values`` / ``histogram`` — set to ``None``.
+    * ``sample_values`` — taken from the first non-empty chunk only.
+
+    This function does **not** modify :func:`profile`.  All existing
+    single-frame profiling behaviour is unchanged.
+
+    Parameters
+    ----------
+    chunks : Iterable[ArFrame]
+        An iterable of :class:`ArFrame` objects, typically produced by
+        :func:`read_csv_chunked`.
+    sample_size : int, default 5
+        Number of non-null sample values to keep per column (drawn from
+        the first non-empty chunk).
+
+    Returns
+    -------
+    DataQualityReport
+        Merged report.  See the accuracy contract above for which fields
+        are exact and which are omitted.
+
+    Raises
+    ------
+    TypeError
+        If any element yielded by *chunks* is not an ArFrame.
+    TypeError
+        If *sample_size* is not an integer.
+    ValueError
+        If *sample_size* is negative.
+
+    Examples
+    --------
+    >>> report = ar.profile_chunked(
+    ...     ar.read_csv_chunked("large.csv", chunksize=50_000),
+    ... )
+    >>> report.row_count
+    3000000
+    >>> report.columns["age"].null_count
+    142
+    """
+    if not isinstance(sample_size, int) or isinstance(sample_size, bool):
+        raise TypeError("sample_size must be an integer")
+    if sample_size < 0:
+        raise ValueError("sample_size must be non-negative")
+
+    # Per-column running accumulators. Populated on first non-empty chunk.
+    # Keys: column name.
+    col_dtypes: dict[str, str] = {}
+    col_semantic_types: dict[str, str] = {}
+    col_suggested_dtypes: dict[str, str | None] = {}
+    col_null_counts: dict[str, int] = {}
+    col_empty_string_counts: dict[str, int] = {}
+    col_whitespace_counts: dict[str, int] = {}
+    col_min: dict[str, Any] = {}
+    col_max: dict[str, Any] = {}
+    col_mean_sum: dict[str, float] = {}  # weighted sum for mean calculation
+    col_mean_n: dict[str, int] = {}  # non-null count for mean calculation
+    col_sample_values: dict[str, list[Any]] = {}
+
+    total_row_count = 0
+    column_order: list[str] | None = None  # set on first chunk
+    first_chunk_seen = False
+
+    for chunk_index, chunk in enumerate(chunks):
+        if not isinstance(chunk, ArFrame):
+            raise TypeError(
+                f"profile_chunked() expects each chunk to be an ArFrame, "
+                f"got {type(chunk).__name__} at position {chunk_index}"
+            )
+
+        chunk_row_count = chunk.shape[0]
+        if chunk_row_count == 0:
+            continue
+
+        chunk_report = profile(chunk, sample_size=sample_size)
+        total_row_count += chunk_row_count
+
+        if not first_chunk_seen:
+            # Initialise column tracking from the first non-empty chunk.
+            column_order = list(chunk_report.columns.keys())
+            for col_name, col_prof in chunk_report.columns.items():
+                col_dtypes[col_name] = col_prof.dtype
+                col_semantic_types[col_name] = col_prof.semantic_type
+                col_suggested_dtypes[col_name] = col_prof.suggested_dtype
+                col_null_counts[col_name] = col_prof.null_count
+                col_empty_string_counts[col_name] = col_prof.empty_string_count
+                col_whitespace_counts[col_name] = col_prof.whitespace_count
+                col_sample_values[col_name] = list(col_prof.sample_values)
+                # min / max initialised from first chunk.
+                col_min[col_name] = col_prof.min
+                col_max[col_name] = col_prof.max
+                # Accumulate weighted mean.
+                non_null_n = chunk_row_count - col_prof.null_count
+                if col_prof.mean is not None and non_null_n > 0:
+                    col_mean_sum[col_name] = col_prof.mean * non_null_n
+                    col_mean_n[col_name] = non_null_n
+                else:
+                    col_mean_sum[col_name] = 0.0
+                    col_mean_n[col_name] = 0
+            first_chunk_seen = True
+            continue
+
+        # Merge subsequent chunks.
+        for col_name, col_prof in chunk_report.columns.items():
+            if col_name not in col_null_counts:
+                # Column appeared in a later chunk but not the first;
+                # initialise with zeros so arithmetic is safe.
+                col_null_counts[col_name] = 0
+                col_empty_string_counts[col_name] = 0
+                col_whitespace_counts[col_name] = 0
+                col_min[col_name] = col_prof.min
+                col_max[col_name] = col_prof.max
+                col_mean_sum[col_name] = 0.0
+                col_mean_n[col_name] = 0
+                col_dtypes[col_name] = col_prof.dtype
+                col_semantic_types[col_name] = col_prof.semantic_type
+                col_suggested_dtypes[col_name] = col_prof.suggested_dtype
+                col_sample_values[col_name] = []
+
+            col_null_counts[col_name] += col_prof.null_count
+            col_empty_string_counts[col_name] += col_prof.empty_string_count
+            col_whitespace_counts[col_name] += col_prof.whitespace_count
+
+            # min / max: None means no non-null values in that chunk.
+            if col_prof.min is not None:
+                try:
+                    if col_min[col_name] is None or col_prof.min < col_min[col_name]:
+                        col_min[col_name] = col_prof.min
+                except TypeError:
+                    pass  # non-comparable types; keep existing value
+
+            if col_prof.max is not None:
+                try:
+                    if col_max[col_name] is None or col_prof.max > col_max[col_name]:
+                        col_max[col_name] = col_prof.max
+                except TypeError:
+                    pass
+
+            # Weighted mean accumulation.
+            non_null_n = chunk_row_count - col_prof.null_count
+            if col_prof.mean is not None and non_null_n > 0:
+                col_mean_sum[col_name] += col_prof.mean * non_null_n
+                col_mean_n[col_name] += non_null_n
+
+    # No non-empty chunks were consumed.
+    if not first_chunk_seen:
+        return DataQualityReport(
+            row_count=0,
+            column_count=0,
+            memory_usage=0,
+            duplicate_rows=0,
+            duplicate_ratio=0.0,
+            quality_score=100.0,
+            score_components={},
+            columns={},
+            suggestions=[],
+        )
+
+    # Build merged ColumnProfile objects.
+    merged_columns: dict[str, ColumnProfile] = {}
+    assert column_order is not None
+    for col_name in column_order:
+        null_count = col_null_counts.get(col_name, 0)
+        null_ratio = _ratio(null_count, total_row_count)
+
+        non_null_n = col_mean_n.get(col_name, 0)
+        merged_mean: float | None = (
+            col_mean_sum[col_name] / non_null_n
+            if non_null_n > 0 and col_name in col_mean_sum
+            else None
+        )
+
+        merged_columns[col_name] = ColumnProfile(
+            name=col_name,
+            dtype=col_dtypes.get(col_name, "string"),
+            semantic_type=col_semantic_types.get(col_name, "unknown"),
+            row_count=total_row_count,
+            null_count=null_count,
+            null_ratio=null_ratio,
+            # unique_count / unique_ratio: not computed in chunked mode.
+            unique_count=0,
+            unique_ratio=0.0,
+            empty_string_count=col_empty_string_counts.get(col_name, 0),
+            whitespace_count=col_whitespace_counts.get(col_name, 0),
+            suggested_dtype=col_suggested_dtypes.get(col_name),
+            min=col_min.get(col_name),
+            max=col_max.get(col_name),
+            mean=merged_mean,
+            # Quantiles / std / outlier stats: not aggregatable across chunks.
+            std=None,
+            q25=None,
+            q50=None,
+            q75=None,
+            q95=None,
+            iqr=None,
+            outlier_lower_bound=None,
+            outlier_upper_bound=None,
+            outlier_count=None,
+            outlier_ratio=None,
+            sample_values=col_sample_values.get(col_name, []),
+            # top_values / histogram: not aggregatable across chunks.
+            top_values=None,
+            histogram=None,
+        )
+
+    # Quality score: computed from null penalty only.
+    # duplicate_penalty and type_mismatch_penalty are omitted because
+    # cross-chunk duplicates and full uniqueness data are unavailable.
+    null_ratios = [c.null_ratio for c in merged_columns.values()]
+    avg_null_ratio = sum(null_ratios) / len(null_ratios) if null_ratios else 0.0
+    null_penalty = round(min(avg_null_ratio * 100.0, 40.0), 2)
+    quality_score = round(100.0 - null_penalty, 2)
+    score_components: dict[str, float] = {}
+    if null_penalty > 0:
+        score_components["null_penalty"] = -null_penalty
+
+    interim_report = DataQualityReport(
+        row_count=total_row_count,
+        column_count=len(merged_columns),
+        memory_usage=0,
+        # duplicate_rows / duplicate_ratio: cross-chunk duplicates not tracked.
+        duplicate_rows=0,
+        duplicate_ratio=0.0,
+        quality_score=quality_score,
+        score_components=score_components,
+        columns=merged_columns,
+        suggestions=[],
+    )
+    return DataQualityReport(
+        row_count=interim_report.row_count,
+        column_count=interim_report.column_count,
+        memory_usage=interim_report.memory_usage,
+        duplicate_rows=interim_report.duplicate_rows,
+        duplicate_ratio=interim_report.duplicate_ratio,
+        quality_score=interim_report.quality_score,
+        score_components=interim_report.score_components,
+        columns=interim_report.columns,
+        suggestions=suggest_cleaning(interim_report),
     )
 
 

@@ -94,6 +94,7 @@ from .quality import (
     check_quality_gates,
     compare_profiles,
     profile,
+    profile_chunked,
     suggest_cleaning,
 )
 from .schema import (
@@ -121,6 +122,7 @@ from .schema import (
     diff_schema,
     register_validator,
     validate,
+    validate_chunked,
 )
 from .schema_export import schema_from_yaml, schema_to_dict, schema_to_yaml
 
@@ -199,6 +201,7 @@ __all__ = [
     "reset_steps",
     # Data quality
     "profile",
+    "profile_chunked",
     "compare_profiles",
     "check_quality_gates",
     "suggest_cleaning",
@@ -218,6 +221,7 @@ __all__ = [
     "ValidationIssue",
     "ValidationResult",
     "validate",
+    "validate_chunked",
     "diff_schema",
     "Int64",
     "Float64",

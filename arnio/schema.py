@@ -9,7 +9,7 @@ import json
 import math
 import re
 import warnings
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Callable
 from zoneinfo import available_timezones
@@ -1952,6 +1952,138 @@ def validate(
         row_count=len(df),
         issue_count=len(issues),
         issues=issues,
+        bad_rows=bad_rows,
+    )
+
+
+def validate_chunked(
+    chunks: Iterable[ArFrame],
+    schema: Schema | dict[str, Field],
+    *,
+    max_errors: int | None = None,
+) -> ValidationResult:
+    """Validate an iterable of ArFrame chunks against a schema.
+
+    Applies :func:`validate` to each chunk in turn and aggregates the
+    results into a single :class:`ValidationResult`.  Row indices in the
+    returned issues are adjusted to reflect global row positions across
+    all chunks so that ``result.bad_rows`` refers to the same rows as
+    the original file when chunks were produced by
+    :func:`read_csv_chunked`.
+
+    This function does **not** modify :func:`validate`.  All existing
+    single-frame validation behaviour is unchanged.
+
+    Parameters
+    ----------
+    chunks : Iterable[ArFrame]
+        An iterable of :class:`ArFrame` objects, typically produced by
+        :func:`read_csv_chunked`.  Each element must be a valid ArFrame.
+    schema : Schema or dict[str, Field]
+        Validation schema to apply to every chunk.
+    max_errors : int or None, default None
+        Stop processing after this many issues have been accumulated.
+        Processing of the current chunk halts as soon as the limit is
+        reached and no further chunks are consumed.  When ``None`` all
+        issues are collected.
+
+    Returns
+    -------
+    ValidationResult
+        A single merged result whose ``row_count`` is the total number of
+        rows across all chunks, ``issues`` contains all accumulated
+        :class:`ValidationIssue` objects (with globally-correct
+        ``row_index`` values), and ``bad_rows`` is the sorted list of
+        globally-correct bad row indices.
+
+    Raises
+    ------
+    TypeError
+        If any element yielded by *chunks* is not an ArFrame.
+    TypeError
+        If *max_errors* is not an int or None.
+    ValueError
+        If *max_errors* is <= 0.
+
+    Examples
+    --------
+    >>> schema = ar.Schema({"id": ar.Int64(nullable=False), "email": ar.Email()})
+    >>> result = ar.validate_chunked(
+    ...     ar.read_csv_chunked("large.csv", chunksize=50_000),
+    ...     schema,
+    ...     max_errors=1000,
+    ... )
+    >>> result.passed
+    False
+    >>> len(result.bad_rows)
+    42
+    """
+    if max_errors is not None:
+        if isinstance(max_errors, bool) or not isinstance(max_errors, int):
+            raise TypeError("max_errors must be an int or None")
+        if max_errors <= 0:
+            raise ValueError("max_errors must be >= 1")
+
+    schema = schema if isinstance(schema, Schema) else Schema(schema)
+
+    all_issues: list[ValidationIssue] = []
+    total_row_count = 0
+    early_stop = False
+
+    for chunk_index, chunk in enumerate(chunks):
+        if not isinstance(chunk, ArFrame):
+            raise TypeError(
+                f"validate_chunked() expects each chunk to be an ArFrame, "
+                f"got {type(chunk).__name__} at position {chunk_index}"
+            )
+
+        if early_stop:
+            # Still need to count remaining rows; consume without validating.
+            total_row_count += chunk.shape[0]
+            continue
+
+        row_offset = total_row_count
+        chunk_row_count = chunk.shape[0]
+
+        # Compute the per-chunk error budget so validate() can stop early.
+        chunk_max_errors = None if max_errors is None else max_errors - len(all_issues)
+        if chunk_max_errors is not None and chunk_max_errors <= 0:
+            early_stop = True
+            total_row_count += chunk_row_count
+            continue
+
+        chunk_result = validate(chunk, schema, max_errors=chunk_max_errors)
+
+        # Shift every row_index by the cumulative offset so callers see
+        # global row positions rather than within-chunk positions.
+        for issue in chunk_result.issues:
+            if issue.row_index is not None:
+                adjusted_row_index = issue.row_index + row_offset
+            else:
+                adjusted_row_index = None
+            all_issues.append(
+                ValidationIssue._fast_create(
+                    column=issue.column,
+                    rule=issue.rule,
+                    message=issue.message,
+                    row_index=adjusted_row_index,
+                    value=issue.value,
+                    severity=issue.severity,
+                )
+            )
+
+        total_row_count += chunk_row_count
+
+        if max_errors is not None and len(all_issues) >= max_errors:
+            early_stop = True
+
+    bad_rows = sorted(
+        {issue.row_index for issue in all_issues if issue.row_index is not None}
+    )
+    return ValidationResult(
+        row_count=total_row_count,
+        issue_count=len(all_issues),
+        issues=all_issues,
         bad_rows=bad_rows,
     )
 
