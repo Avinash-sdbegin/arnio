@@ -1,3 +1,19 @@
+import json
+from pathlib import Path
+
+BASELINE_FILE = "benchmarks/baseline.json"
+RESULTS_FILE = "benchmark_results.json"
+OUTPUT_FILE = "benchmark_summary.md"
+
+
+def load_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
 def generate_summary(results, baseline):
     if not results or not baseline:
         return "## Benchmark Summary\n\nNo comparable baseline data available.\n"
@@ -39,3 +55,19 @@ def generate_summary(results, baseline):
         lines.append(f"| {case_name} | {status} |")
 
     return "\n".join(lines) + "\n"
+
+
+def main():
+    results = load_json(RESULTS_FILE)
+    baseline = load_json(BASELINE_FILE)
+
+    summary = generate_summary(results, baseline)
+
+    output_path = Path(OUTPUT_FILE)
+    output_path.write_text(summary)
+
+    print(summary)
+
+
+if __name__ == "__main__":
+    main()
