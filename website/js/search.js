@@ -5,7 +5,6 @@ if (searchInput && resultsBox) {
   searchInput.setAttribute("aria-controls", "search-results");
   searchInput.setAttribute("aria-expanded", "false");
   searchInput.setAttribute("aria-autocomplete", "list");
-  
   resultsBox.setAttribute("role", "listbox");
   resultsBox.id = "search-results";
 
@@ -121,9 +120,13 @@ if (searchInput && resultsBox) {
 
     if (e.key === "Escape") {
       selectedIndex = -1;
+      results.forEach((r) => {
+        r.classList.remove("active");
+        r.setAttribute("aria-selected", "false");
+      });
       resultsBox.classList.remove("show");
       searchInput.setAttribute("aria-expanded", "false");
-      searchInput.blur();
+      searchInput.focus();
     }
   });
 }
